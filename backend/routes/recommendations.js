@@ -1,84 +1,102 @@
 const express = require("express");
 const router = express.Router();
 const SpotifyWebApi = require("spotify-web-api-node");
+const axios = require("axios");
 
-// 🎵 Local fallback data (for quotes or backup)
-const quotesData = [
-  { emotion: "Happy", text: "Happiness depends upon ourselves. – Aristotle" },
-  { emotion: "Sad", text: "Tears come from the heart and not from the brain. – Leonardo da Vinci" },
-  { emotion: "Stressed", text: "Calmness is the cradle of power. – Josiah Gilbert Holland" },
-  { emotion: "Excited", text: "The best way to predict the future is to create it. – Peter Drucker" },
+// Local fallback data
+const quotesData = require('../data/quotes.json') || [
+  { emotion: "Happy", text: "Keep smiling!" },
+  { emotion: "Sad", text: "It's okay to feel sad sometimes." },
+  { emotion: "Stressed", text: "Take a deep breath." },
+  { emotion: "Excited", text: "You can do it!" },
 ];
 
-// 🎵 Spotify API setup
+// Spotify API setup (replace these)
 const spotifyApi = new SpotifyWebApi({
-  clientId: "30e5727292cd48f88ff710dd20c0180d",          // Replace with your real Spotify client ID
-  clientSecret: "4142701771214e7dbdf28d3da3fb3ce9",  // Replace with your real Spotify client secret
-  redirectUri: "http://localhost:8888/callback", // Must match in Spotify Dashboard
+  clientId: "40e5727292cd48f88ff710dd20c0180d",
+  clientSecret: "3142701771214e7dbdf28d3da3fb3ce9",
+  redirectUri: "http://localhost:8888/callback",
 });
 
-// 🔄 Helper: refresh token
 async function refreshSpotifyToken() {
   try {
     const data = await spotifyApi.clientCredentialsGrant();
     spotifyApi.setAccessToken(data.body["access_token"]);
-    console.log("✅ Spotify access token refreshed");
+    console.log("✅ Spotify access token refreshed (expires in sec):", data.body["expires_in"]);
+    return true;
   } catch (err) {
-    console.error("❌ Error refreshing Spotify token:", err.message);
+    console.error("❌ Error refreshing Spotify token:", err.message || err);
+    return false;
   }
 }
 
-// 🔄 Helper: shuffle array
 function shuffleArray(array) {
   return array.sort(() => Math.random() - 0.5);
 }
 
-// 📌 API Route: /api/recommendations
 router.get("/", async (req, res) => {
-  const emotion = req.query.emotion;
-  const type = req.query.type;
+  const emotion = (req.query.emotion || "").trim();
+  const type = (req.query.type || "").trim();
+
+  console.log("→ GET /recommendations", { emotion, type, time: new Date().toISOString() });
 
   if (!emotion || !type) {
+    console.log("⛔ Missing params");
     return res.status(400).json({ error: "Emotion and type are required" });
   }
 
   try {
     if (type === "music") {
-      await refreshSpotifyToken();
+      const tokenOk = await refreshSpotifyToken();
+      if (!tokenOk) {
+        console.log("Using fallback music because token refresh failed");
+        const fallback = require("../data/music.json");
+        return res.json(fallback.filter(m => m.emotion.toLowerCase() === emotion.toLowerCase()));
+      }
 
-      // Get up to 50 tracks for variety
+      // Try to get up to 50 tracks for variety
+      console.log("Searching Spotify for:", emotion);
       const result = await spotifyApi.searchTracks(emotion, { limit: 50 });
 
-      let tracks = result.body.tracks.items.map((track) => ({
+      const items = result.body?.tracks?.items || [];
+      console.log(`Spotify returned ${items.length} tracks`);
+
+      let tracks = items.map(track => ({
         title: track.name,
-        artist: track.artists.map((a) => a.name).join(", "),
-        url: track.external_urls.spotify,
-        albumImage: track.album.images[0]?.url || "",
+        artist: track.artists.map(a => a.name).join(", "),
+        url: track.external_urls?.spotify || "",
+        albumImage: track.album?.images?.[0]?.url || "",
       }));
 
-      // Shuffle + return 10
       tracks = shuffleArray(tracks).slice(0, 10);
 
-      return res.json(
-        tracks.length > 0
-          ? tracks
-          : [{ title: "No tracks found", artist: "", url: "", albumImage: "" }]
-      );
-    } else if (type === "quotes") {
-      const filteredQuotes = quotesData.filter(
-        (q) => q.emotion.toLowerCase() === emotion.toLowerCase()
-      );
-      return res.json(
-        filteredQuotes.length > 0
-          ? shuffleArray(filteredQuotes).slice(0, 3)
-          : [{ text: "No quotes found for this emotion." }]
-      );
-    } else {
-      return res.status(400).json({ error: "Invalid type" });
+      if (tracks.length === 0) {
+        console.log("No Spotify tracks found, using fallback");
+        const fallback = require("../data/music.json");
+        return res.json(fallback.filter(m => m.emotion.toLowerCase() === emotion.toLowerCase()));
+      }
+
+      return res.json(tracks);
     }
-  } catch (error) {
-    console.error("❌ Error fetching recommendations:", error.message);
-    res.status(500).json({ error: "Failed to fetch recommendations" });
+
+    if (type === "quotes") {
+      try {
+        console.log("Fetching quote from Quotable for tag:", emotion.toLowerCase());
+        const response = await axios.get(`https://api.quotable.io/random?tags=${encodeURIComponent(emotion.toLowerCase())}`);
+        const quote = { quote: response.data.content, author: response.data.author };
+        console.log("Quote fetched");
+        return res.json([quote]);
+      } catch (err) {
+        console.error("Quotable API failed:", err.message || err);
+        const filtered = quotesData.filter(q => q.emotion.toLowerCase() === emotion.toLowerCase());
+        return res.json(filtered);
+      }
+    }
+
+    return res.status(400).json({ error: "Invalid type" });
+  } catch (err) {
+    console.error("Server error:", err.message || err);
+    return res.status(500).json({ error: "Server error" });
   }
 });
 
