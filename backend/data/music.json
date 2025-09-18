@@ -1,0 +1,6 @@
+[
+  { "title": "Happy Song 1", "artist": "Artist A", "emotion": "Happy" },
+  { "title": "Sad Song 1", "artist": "Artist B", "emotion": "Sad" },
+  { "title": "Excited Song 1", "artist": "Artist C", "emotion": "Excited" },
+  { "title": "Stressed Song 1", "artist": "Artist D", "emotion": "Stressed" }
+]
